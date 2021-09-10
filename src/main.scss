@@ -531,6 +531,28 @@ hr {
   width: $field-width;
 }
 
+.tile.tile-blue .tile-inner {
+  background-color: blue;
+}
+.tile.tile-yellow .tile-inner {
+  background-color: yellow;
+}
+.tile.tile-red .tile-inner {
+  background-color: red;
+}
+.tile.tile-green .tile-inner {
+  background-color: green;
+}
+.tile.tile-purple .tile-inner {
+  background-color: purple;
+}
+.tile.tile-orange .tile-inner {
+  background-color: orange;
+}
+.tile.tile-white .tile-inner {
+  background-color: white;
+}
+
 @include smaller($mobile-threshold) {
   // Redefine variables for smaller screens
   $field-width: 280px !global;

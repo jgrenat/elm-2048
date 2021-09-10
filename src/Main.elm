@@ -3,8 +3,8 @@ port module Main exposing (main)
 import Browser
 import Browser.Events as Events
 import Browser.Navigation as Nav
-import Html exposing (Html, a, button, div, h1, hr, img, p, strong, text)
-import Html.Attributes exposing (class, href, id, src, target)
+import Html exposing (Html, a, button, div, h1, hr, p, strong, text)
+import Html.Attributes exposing (class, href, id, target)
 import Html.Events exposing (onClick)
 import Html.Keyed as Keyed
 import Html.Lazy exposing (lazy)
@@ -60,8 +60,24 @@ type Status
     | KeepPlaying
 
 
+type Color
+    = Blue
+    | Yellow
+    | Red
+    | Green
+    | Purple
+    | Orange
+    | White
+
+
+type alias Value =
+    { number : Int
+    , color : Color
+    }
+
+
 type alias Tile =
-    { value : Int
+    { value : Value
     , row : Int
     , col : Int
     , locIndex : Int
@@ -177,7 +193,7 @@ tileListDecoder =
 tileDecoder : Decode.Decoder Tile
 tileDecoder =
     Decode.map8 Tile
-        (Decode.field "value" Decode.int)
+        (Decode.field "value" valueDecoder)
         (Decode.field "row" Decode.int)
         (Decode.field "col" Decode.int)
         (Decode.field "locIndex" Decode.int)
@@ -185,6 +201,45 @@ tileDecoder =
         (Decode.field "merged" Decode.bool)
         (Decode.field "moved" Decode.bool)
         (Decode.field "key" Decode.int)
+
+
+valueDecoder : Decode.Decoder Value
+valueDecoder =
+    Decode.map2 Value
+        (Decode.field "number" Decode.int)
+        (Decode.field "color" colorDecoder)
+
+
+colorDecoder : Decode.Decoder Color
+colorDecoder =
+    let
+        get id =
+            case id of
+                "Blue" ->
+                    Decode.succeed Blue
+
+                "Yellow" ->
+                    Decode.succeed Yellow
+
+                "Red" ->
+                    Decode.succeed Red
+
+                "Green" ->
+                    Decode.succeed Green
+
+                "Purple" ->
+                    Decode.succeed Purple
+
+                "Orange" ->
+                    Decode.succeed Orange
+
+                "White" ->
+                    Decode.succeed White
+
+                _ ->
+                    Decode.fail ("unknown value for Color: " ++ id)
+    in
+    Decode.string |> Decode.andThen get
 
 
 statusDecoder : Decode.Decoder Status
@@ -285,7 +340,7 @@ tilesEncoder tiles =
 tileEncoder : Tile -> Encode.Value
 tileEncoder tile =
     Encode.object
-        [ ( "value", Encode.int tile.value )
+        [ ( "value", valueEncoder tile.value )
         , ( "row", Encode.int tile.row )
         , ( "col", Encode.int tile.col )
         , ( "locIndex", Encode.int tile.locIndex )
@@ -294,6 +349,39 @@ tileEncoder tile =
         , ( "moved", Encode.bool tile.moved )
         , ( "key", Encode.int tile.key )
         ]
+
+
+valueEncoder : Value -> Encode.Value
+valueEncoder value =
+    Encode.object <|
+        [ ( "number", Encode.int value.number )
+        , ( "color", encodeColor value.color )
+        ]
+
+
+encodeColor : Color -> Encode.Value
+encodeColor color =
+    case color of
+        Blue ->
+            Encode.string "Blue"
+
+        Yellow ->
+            Encode.string "Yellow"
+
+        Red ->
+            Encode.string "Red"
+
+        Green ->
+            Encode.string "Green"
+
+        Purple ->
+            Encode.string "Purple"
+
+        Orange ->
+            Encode.string "Orange"
+
+        White ->
+            Encode.string "White"
 
 
 
@@ -528,6 +616,7 @@ updateScoresAndGameStatus gs =
         lastMoveScore =
             List.filter (\t -> t.merged) gs.tiles
                 |> List.map .value
+                |> List.map .number
                 |> List.foldl (+) 0
 
         newScore =
@@ -560,7 +649,7 @@ gameStatus gs =
             List.length gs.tiles == maxTiles
 
         anyWinningTile =
-            List.any (.value >> (==) winningTileValue) gs.tiles
+            List.any (\tile -> tile.value.number == winningTileValue) gs.tiles
     in
     case gs.status of
         Playing ->
@@ -639,11 +728,12 @@ tileGenerator firstLocation restOfLocations =
             else
                 2
     in
-    Random.map2
-        (\locIndex num ->
-            tileAtLocationIndex (valueFrom num) locIndex
+    Random.map3
+        (\locIndex color num ->
+            tileAtLocationIndex { number = valueFrom num, color = color } locIndex
         )
         (Random.uniform firstLocation restOfLocations)
+        (Random.uniform Yellow [ Blue, Red ])
         (Random.float 0 1)
 
 
@@ -665,7 +755,7 @@ emptyLocations tiles =
             |> Set.toList
 
 
-tileAtLocationIndex : Int -> Int -> Tile
+tileAtLocationIndex : Value -> Int -> Tile
 tileAtLocationIndex value indx =
     { value = value
     , row = (indx - 1) // 4 + 1
@@ -772,30 +862,97 @@ mergeTiles tiles =
 mergeTilesHelp : List Tile -> Tile -> Tile -> List Tile -> List Tile
 mergeTilesHelp checked t1 t2 rest =
     let
-        merge t =
-            { t | value = t.value * 2, merged = True }
+        merge : Tile -> Tile -> Tile
+        merge tileToMerge otherTile =
+            { tileToMerge
+                | value =
+                    { number = tileToMerge.value.number * 2
+                    , color =
+                        mergeColor tileToMerge.value.color otherTile.value.color
+                            |> Maybe.withDefault White
+                    }
+                , merged = True
+            }
     in
     case rest of
         t3 :: t4 :: ts ->
-            if t1.value == t2.value then
-                mergeTilesHelp (merge t2 :: checked) t3 t4 ts
+            if canMergeTile t1 t2 then
+                mergeTilesHelp (merge t2 t1 :: checked) t3 t4 ts
 
             else
                 mergeTilesHelp (t1 :: checked) t2 t3 (t4 :: ts)
 
         [ t3 ] ->
-            if t1.value == t2.value then
-                List.reverse (t3 :: merge t2 :: checked)
+            if canMergeTile t1 t2 then
+                List.reverse (t3 :: merge t2 t1 :: checked)
 
             else
                 mergeTilesHelp (t1 :: checked) t2 t3 []
 
         [] ->
-            if t1.value == t2.value then
-                List.reverse (merge t2 :: checked)
+            if canMergeTile t1 t2 then
+                List.reverse (merge t2 t1 :: checked)
 
             else
                 List.reverse (t2 :: t1 :: checked)
+
+
+canMergeTile : Tile -> Tile -> Bool
+canMergeTile t1 t2 =
+    t1.value.number
+        == t2.value.number
+        && (mergeColor t1.value.color t2.value.color /= Nothing)
+
+
+mergeColor : Color -> Color -> Maybe Color
+mergeColor color1 color2 =
+    if color1 == color2 then
+        Just color1
+
+    else
+        case ( mergeNonEqualColors color1 color2, mergeNonEqualColors color2 color1 ) of
+            ( Just color, _ ) ->
+                Just color
+
+            ( Nothing, Just color ) ->
+                Just color
+
+            ( Nothing, Nothing ) ->
+                Nothing
+
+
+mergeNonEqualColors : Color -> Color -> Maybe Color
+mergeNonEqualColors color1 color2 =
+    case ( color1, color2 ) of
+        ( Yellow, Red ) ->
+            Just Orange
+
+        ( Yellow, Blue ) ->
+            Just Green
+
+        ( Yellow, Purple ) ->
+            Just White
+
+        ( Red, Blue ) ->
+            Just Purple
+
+        ( Red, Yellow ) ->
+            Just Orange
+
+        ( Red, Green ) ->
+            Just White
+
+        ( Blue, Yellow ) ->
+            Just Green
+
+        ( Blue, Red ) ->
+            Just Purple
+
+        ( Blue, Orange ) ->
+            Just White
+
+        _ ->
+            Nothing
 
 
 
@@ -1002,7 +1159,7 @@ singleTile t =
     div
         [ class <| tileClassStr t ]
         [ div [ class "tile-inner" ]
-            [ text <| String.fromInt t.value ]
+            [ text <| String.fromInt t.value.number ]
         ]
 
 
@@ -1012,14 +1169,40 @@ tileClassStr t =
         classStr =
             String.join " "
                 [ "tile"
-                , "tile-" ++ String.fromInt t.value
+                , "tile-" ++ String.fromInt t.value.number
                 , "tile-position-"
                     ++ String.fromInt t.col
                     ++ "-"
                     ++ String.fromInt t.row
+                , tileColorClassStr t
                 ]
     in
     classStr ++ newTileClassStr t ++ mergedTileClassStr t ++ superTileClassStr t
+
+
+tileColorClassStr : Tile -> String
+tileColorClassStr tile =
+    case tile.value.color of
+        Blue ->
+            "tile-blue"
+
+        Yellow ->
+            "tile-yellow"
+
+        Red ->
+            "tile-red"
+
+        Green ->
+            "tile-green"
+
+        Purple ->
+            "tile-purple"
+
+        Orange ->
+            "tile-orange"
+
+        White ->
+            "tile-white"
 
 
 newTileClassStr : Tile -> String
@@ -1044,7 +1227,7 @@ mergedTileClassStr t =
 
 superTileClassStr : Tile -> String
 superTileClassStr t =
-    case t.value > winningTileValue of
+    case t.value.number > winningTileValue of
         True ->
             " tile-super "
 
